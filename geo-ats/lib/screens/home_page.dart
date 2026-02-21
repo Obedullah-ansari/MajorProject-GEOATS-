@@ -24,86 +24,67 @@ class _HomeScreenState extends State<HomeScreen> {
   double? latitude;
   double? longitude;
   bool isCheckedIn = false;
+  bool isInsideOffice = false;
+
   bool isGpsTrackingEnabled =
       true; // New variable to manage GPS tracking toggle
   final LocationService locationService = LocationService();
   late StreamSubscription<Position> _positionStreamSubscription;
 
   @override
+  @override
   void initState() {
     super.initState();
-    if (isGpsTrackingEnabled) {
-      locationService.setCheckInOutCallback(_handleCheckInOut);
-      _startLocationTracking();
-      _loadCheckInStatus();
-      _startListeningToCheckInStatus();
-    }
-  }
 
-  Future<void> _loadCheckInStatus() async {
-    bool status = await locationService.getCheckInStatus(widget.user!.uid);
-    setState(() {
-      isCheckedIn = status;
+    locationService.setStatusCallback((checkedIn, insideOffice) {
+      setState(() {
+        isCheckedIn = checkedIn;
+        isInsideOffice = insideOffice;
+      });
     });
-  }
 
-  void _handleCheckInOut(bool checkedIn) {
-    setState(() {
-      isCheckedIn = checkedIn;
-    });
+    locationService.startListeningToOfficeLocations();
+    _startLocationTracking();
   }
 
   void _startLocationTracking() {
-    _positionStreamSubscription = Geolocator.getPositionStream(
-      locationSettings: LocationSettings(
-        accuracy: LocationAccuracy.high,
-        distanceFilter: 10,
-      ),
-    ).listen((Position position) async {
-      setState(() {
-        latitude = position.latitude;
-        longitude = position.longitude;
-      });
+    _positionStreamSubscription =
+        Geolocator.getPositionStream(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            distanceFilter: 10,
+          ),
+        ).listen((Position position) async {
+          print(
+            '📍 LOCATION UPDATE: ${position.latitude}, ${position.longitude}',
+          );
 
-      await locationService.handleCheckInOut(
-        widget.user!,
-        LatLng(latitude!, longitude!),
-      );
-    });
+          setState(() {
+            latitude = position.latitude;
+            longitude = position.longitude;
+          });
+
+          await locationService.handleCheckInOut(
+            widget.user!,
+            LatLng(latitude!, longitude!),
+          );
+        });
   }
 
   @override
   void dispose() {
     _positionStreamSubscription.cancel();
+    locationService.stopListeningToOfficeLocations();
     super.dispose();
-  }
-
-  void _startListeningToCheckInStatus() {
-    FirebaseFirestore.instance
-        .collection('checkins')
-        .where('user_id', isEqualTo: widget.user!.uid)
-        .orderBy('check_in_time', descending: true)
-        .limit(1)
-        .snapshots()
-        .listen((snapshot) {
-      if (snapshot.docs.isNotEmpty) {
-        var doc = snapshot.docs.first;
-        setState(() {
-          isCheckedIn = doc['status'] == 'checked_in';
-        });
-      }
-    });
   }
 
   void _toggleGpsTracking() {
     setState(() {
       isGpsTrackingEnabled = !isGpsTrackingEnabled;
     });
+
     if (isGpsTrackingEnabled) {
-      locationService.setCheckInOutCallback(_handleCheckInOut);
       _startLocationTracking();
-      _loadCheckInStatus();
-      _startListeningToCheckInStatus();
     } else {
       _positionStreamSubscription.cancel();
     }
@@ -140,7 +121,8 @@ class _HomeScreenState extends State<HomeScreen> {
               Navigator.pushReplacement(
                 context,
                 MaterialPageRoute(
-                    builder: (BuildContext context) => LoginScreen()),
+                  builder: (BuildContext context) => LoginScreen(),
+                ),
               );
             },
           ),
@@ -162,8 +144,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     shape: RoundedRectangleBorder(
                       borderRadius: BorderRadius.circular(12.0),
                     ),
-                    color: Colors.red.shade100
-              ,
+                    color: Colors.red.shade100,
                     child: Padding(
                       padding: const EdgeInsets.all(16.0),
                       child: Column(
@@ -199,31 +180,41 @@ class _HomeScreenState extends State<HomeScreen> {
                 crossAxisSpacing: 16,
                 mainAxisSpacing: 16,
                 children: [
-                  _buildActionCard(
-                    icon: Icons.edit_location,
-                    label: "Manual Check-In/Out",
-                    onTap: () {
-                      Navigator.push(
+                  if (isInsideOffice == true)
+                    _buildActionCard(
+                      icon: Icons.edit_location,
+                      label: "Manual Check-In/Out",
+                      onTap: () async {
+                        final result = await Navigator.push(
                           context,
                           MaterialPageRoute(
-                              builder: (BuildContext context) =>
-                                  ManualAttendancePage(
-                                    user: widget.user,
-                                  )));
-                    },
-                    color: Colors.purpleAccent,
-                  ),
+                            builder: (_) =>
+                                ManualAttendancePage(user: widget.user),
+                          ),
+                        );
+
+                        // 🔥 AFTER MANUAL ACTION → FETCH REAL STATUS FROM FIRESTORE
+                        bool updatedStatus = await locationService
+                            .getCheckInStatus(widget.user!.uid);
+
+                        setState(() {
+                          isCheckedIn = updatedStatus;
+                        });
+                      },
+                      color: Colors.purpleAccent,
+                    ),
+
                   _buildActionCard(
                     icon: Icons.access_time,
                     label: "Working Hours",
                     onTap: () {
                       Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (BuildContext context) =>
-                                  UserWorkHoursPage(
-                                    userId: widget.user!.uid,
-                                  )));
+                        context,
+                        MaterialPageRoute(
+                          builder: (BuildContext context) =>
+                              UserWorkHoursPage(userId: widget.user!.uid),
+                        ),
+                      );
                     },
                     color: Colors.blueAccent,
                   ),
@@ -232,12 +223,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     label: "Attendance History",
                     onTap: () {
                       Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                              builder: (BuildContext context) =>
-                                  AttendanceHistoryPage(
-                                    userId: widget.user!.uid,
-                                  )));
+                        context,
+                        MaterialPageRoute(
+                          builder: (BuildContext context) =>
+                              AttendanceHistoryPage(userId: widget.user!.uid),
+                        ),
+                      );
                     },
                     color: Color(0xff1BCEDF),
                   ),
@@ -281,9 +272,7 @@ class _HomeScreenState extends State<HomeScreen> {
   Widget _buildCheckInStatusCard() {
     return Card(
       elevation: 4,
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(12),
-      ),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
       child: Container(
         padding: EdgeInsets.symmetric(vertical: 20, horizontal: 16),
         decoration: BoxDecoration(
@@ -332,28 +321,32 @@ class _HomeScreenState extends State<HomeScreen> {
           ? FlutterMap(
               options: MapOptions(
                 initialCenter: LatLng(latitude!, longitude!),
-                initialZoom: 15.0,
+                initialZoom: 16,
               ),
               children: [
                 TileLayer(
                   urlTemplate:
-                      "https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",
+                      "https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png",
+                  subdomains: const ['a', 'b', 'c'],
+                  userAgentPackageName: 'com.attendance.app',
                 ),
                 MarkerLayer(
                   markers: [
                     Marker(
                       point: LatLng(latitude!, longitude!),
+                      width: 40,
+                      height: 40,
                       child: Icon(
                         Icons.location_on,
+                        color: Colors.red,
                         size: 40,
-                        color: Color(0xff1BCEDF), // Blue color from theme
                       ),
                     ),
                   ],
                 ),
               ],
             )
-          : Center(child: CircularProgressIndicator()),
+          : const Center(child: CircularProgressIndicator()),
     );
   }
 
@@ -368,9 +361,7 @@ class _HomeScreenState extends State<HomeScreen> {
       onTap: onTap,
       child: Card(
         elevation: 3,
-        shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(12),
-        ),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         child: Container(
           decoration: BoxDecoration(
             color: color.withOpacity(0.1),
@@ -380,11 +371,7 @@ class _HomeScreenState extends State<HomeScreen> {
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(
-                icon,
-                size: 40,
-                color: color,
-              ),
+              Icon(icon, size: 40, color: color),
               SizedBox(height: 8),
               Text(
                 label,

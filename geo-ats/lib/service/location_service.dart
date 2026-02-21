@@ -2,22 +2,57 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
+import 'dart:async';
 
 class LocationService {
+  LatLng? _lastKnownLocation;
+  User? _currentUser;
+
   List<Map<String, dynamic>> officeLocations = [];
 
-  // Callback to notify the widget about state changes
-  Function(bool)? onCheckInOutChanged;
 
-  // Method to set the callback function
-  void setCheckInOutCallback(Function(bool) callback) {
-    onCheckInOutChanged = callback;
+  Function(bool isCheckedIn, bool isInsideOffice)? onStatusChanged;
+
+
+  void setStatusCallback(Function(bool, bool) callback) {
+    onStatusChanged = callback;
+  }
+
+  bool isInsideOffice(LatLng location) {
+    return isOffice(location).isNotEmpty;
+  }
+
+  StreamSubscription<QuerySnapshot>? _officeSubscription;
+
+  void startListeningToOfficeLocations() {
+    _officeSubscription = FirebaseFirestore.instance
+        .collection('officeLocations')
+        .snapshots()
+        .listen((snapshot) async {
+          officeLocations = snapshot.docs.map((doc) {
+            return {
+              'latitude': doc['latitude'],
+              'longitude': doc['longitude'],
+              'radius': doc['radius'],
+              'office_name': doc['office_name'],
+            };
+          }).toList();
+
+          if (_lastKnownLocation != null && _currentUser != null) {
+            await handleCheckInOut(_currentUser!, _lastKnownLocation!);
+          }
+        });
+  }
+
+  void stopListeningToOfficeLocations() {
+    _officeSubscription?.cancel();
   }
 
   // Fetch office locations from Firestore dynamically
   Future<void> fetchOfficeLocations() async {
-    final QuerySnapshot snapshot =
-    await FirebaseFirestore.instance.collection('officeLocations').get();
+    final QuerySnapshot snapshot = await FirebaseFirestore.instance
+        .collection('officeLocations')
+        .get();
 
     officeLocations = snapshot.docs.map((doc) {
       return {
@@ -55,13 +90,16 @@ class LocationService {
 
     // When permission is granted, get the current location
     return await Geolocator.getCurrentPosition(
-        desiredAccuracy: LocationAccuracy.high);
+      desiredAccuracy: LocationAccuracy.high,
+    );
   }
 
   // Get user's name from Firestore
   Future<String> getUserName(String userId) async {
-    DocumentSnapshot userDoc =
-    await FirebaseFirestore.instance.collection('users').doc(userId).get();
+    DocumentSnapshot userDoc = await FirebaseFirestore.instance
+        .collection('users')
+        .doc(userId)
+        .get();
     if (userDoc.exists) {
       return userDoc['name'] ?? 'Unknown User';
     }
@@ -82,11 +120,15 @@ class LocationService {
         officeLon,
       );
 
+      print(
+        '📏 Distance to ${office['office_name']}: $distance m (radius $radius)',
+      );
+
       if (distance <= radius) {
         return office['office_name'];
       }
     }
-    return ''; // Return empty string if the user is outside all office locations
+    return '';
   }
 
   Future<bool> getCheckInStatus(String userId) async {
@@ -114,21 +156,24 @@ class LocationService {
       FirebaseFirestore firestore = FirebaseFirestore.instance;
       CollectionReference checkins = firestore.collection('checkins');
 
-      await checkins.add({
-        'user_id': user.uid,
-        'name': userName,
-        'office_name': officeName,
-        'check_in_time': Timestamp.now(),
-        'latitude': location.latitude,
-        'longitude': location.longitude,
-        'status': 'checked_in',
-      }).then((value) {
-        if (onCheckInOutChanged != null) {
-          onCheckInOutChanged!(true);
-        }
-      }).catchError((error) {
-        print("Failed to check in: $error");
-      });
+      await checkins
+          .add({
+            'user_id': user.uid,
+            'name': userName,
+            'office_name': officeName,
+            'check_in_time': Timestamp.now(),
+            'latitude': location.latitude,
+            'longitude': location.longitude,
+            'status': 'checked_in',
+          })
+          .then((value) {
+            if (onStatusChanged != null) {
+              onStatusChanged?.call(true, true);
+            }
+          })
+          .catchError((error) {
+            print("Failed to check in: $error");
+          });
     } else {
       print("User is not at an office location.");
     }
@@ -152,29 +197,35 @@ class LocationService {
         var checkInDoc = checkInSnapshot.docs.first;
         String checkInDocId = checkInDoc.id;
 
-        await checkInDoc.reference.update({
-          'status': 'checked_out',
-          'check_out_time': Timestamp.now(),
-        }).then((value) {
-          CollectionReference checkouts = firestore.collection('checkouts');
-          checkouts.add({
-            'user_id': user.uid,
-            'name': userName,
-            'office_name': officeName,
-            'check_out_time': Timestamp.now(),
-            'latitude': location.latitude,
-            'longitude': location.longitude,
-            'status': 'checked_out',
-          }).then((value) {
-            if (onCheckInOutChanged != null) {
-              onCheckInOutChanged!(false);
-            }
-          }).catchError((error) {
-            print("Failed to check out: $error");
-          });
-        }).catchError((error) {
-          print("Failed to update check-in status: $error");
-        });
+        await checkInDoc.reference
+            .update({
+              'status': 'checked_out',
+              'check_out_time': Timestamp.now(),
+            })
+            .then((value) {
+              CollectionReference checkouts = firestore.collection('checkouts');
+              checkouts
+                  .add({
+                    'user_id': user.uid,
+                    'name': userName,
+                    'office_name': officeName,
+                    'check_out_time': Timestamp.now(),
+                    'latitude': location.latitude,
+                    'longitude': location.longitude,
+                    'status': 'checked_out',
+                  })
+                  .then((value) {
+                    if (onStatusChanged != null) {
+                      onStatusChanged?.call(false, false);
+                    }
+                  })
+                  .catchError((error) {
+                    print("Failed to check out: $error");
+                  });
+            })
+            .catchError((error) {
+              print("Failed to update check-in status: $error");
+            });
       } else {
         print("No check-in record found for the user.");
       }
@@ -184,16 +235,24 @@ class LocationService {
   }
 
   Future<void> handleCheckInOut(User user, LatLng currentLocation) async {
-    await fetchOfficeLocations(); // Fetch office locations before handling check-in/out
+    _lastKnownLocation = currentLocation;
+    _currentUser = user;
 
-    bool isCheckedIn = await getCheckInStatus(user.uid);
+    bool insideOffice = isInsideOffice(currentLocation);
+    bool checkedIn = await getCheckInStatus(user.uid);
 
-    if (isCheckedIn && isOffice(currentLocation).isEmpty) {
-      await checkOut(user, currentLocation);
-    } else if (!isCheckedIn && isOffice(currentLocation).isNotEmpty) {
+    if (!checkedIn && insideOffice) {
       await checkIn(user, currentLocation);
-    } else {
-      print("No operation needed.");
+      onStatusChanged?.call(true, true);
+      return;
     }
+
+    if (checkedIn && !insideOffice) {
+      await checkOut(user, currentLocation);
+      onStatusChanged?.call(false, false);
+      return;
+    }
+
+    onStatusChanged?.call(checkedIn, insideOffice);
   }
 }

@@ -103,6 +103,7 @@ class _ManualAttendancePageState extends State<ManualAttendancePage> {
           checkInOfficeName = '';
           checkOutTime = DateTime.now();
         });
+
       }
     });
   }
