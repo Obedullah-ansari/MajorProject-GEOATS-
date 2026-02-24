@@ -10,13 +10,20 @@ class SignupScreen extends StatefulWidget {
 }
 
 class _SignupScreenState extends State<SignupScreen> {
+  final _nameController = TextEditingController();
+  final _employeeIdController = TextEditingController(); // ⭐ NEW
   final _emailController = TextEditingController();
   final _passwordController = TextEditingController();
-  final _nameController = TextEditingController();
+
   bool isLoading = false;
 
-  // Function to handle signup
+  // 🔥 SIGNUP FUNCTION
   Future<void> signup() async {
+    if (_employeeIdController.text.trim().isEmpty) {
+      _showErrorDialog("Please enter Employee ID");
+      return;
+    }
+
     setState(() {
       isLoading = true;
     });
@@ -28,18 +35,18 @@ class _SignupScreenState extends State<SignupScreen> {
         password: _passwordController.text.trim(),
       );
 
-      // Store user details in Firestore
+      // ⭐ SAVE USER DATA TO FIRESTORE
       await FirebaseFirestore.instance
           .collection('users')
           .doc(userCredential.user!.uid)
           .set({
         'name': _nameController.text.trim(),
+        'employeeId': _employeeIdController.text.trim(), // ⭐ NEW FIELD
         'email': _emailController.text.trim(),
         'uid': userCredential.user!.uid,
-        'createdAt': Timestamp.now(), // Store the current timestamp
+        'createdAt': Timestamp.now(),
       });
 
-      // After successful signup, navigate to Home screen
       Navigator.pushReplacement(
         context,
         MaterialPageRoute(
@@ -53,18 +60,16 @@ class _SignupScreenState extends State<SignupScreen> {
     }
   }
 
-  // Function to show error dialog
+  // 🔴 ERROR DIALOG
   void _showErrorDialog(String message) {
     showDialog(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text('Error'),
         content: Text(message),
-        actions: <Widget>[
+        actions: [
           TextButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-            },
+            onPressed: () => Navigator.of(ctx).pop(),
             child: Text('OK'),
           ),
         ],
@@ -88,21 +93,18 @@ class _SignupScreenState extends State<SignupScreen> {
           child: Center(
             child: SingleChildScrollView(
               child: Column(
-                mainAxisSize: MainAxisSize.min,
                 children: [
-                  // Logo or App Name at the top
                   SizedBox(height: 40),
                   Text(
                     'Create an Account',
                     style: TextStyle(
-                      fontSize: 28,
-                      fontWeight: FontWeight.bold,
-                      color: Colors.white,
-                    ),
+                        fontSize: 28,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.white),
                   ),
                   SizedBox(height: 40),
 
-                  // Name Input
+                  // NAME
                   _buildTextField(
                     controller: _nameController,
                     hintText: 'Enter your name',
@@ -110,7 +112,15 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                   SizedBox(height: 20),
 
-                  // Email Input
+                  // ⭐ EMPLOYEE ID FIELD
+                  _buildTextField(
+                    controller: _employeeIdController,
+                    hintText: 'Enter your Employee ID',
+                    icon: Icons.badge,
+                  ),
+                  SizedBox(height: 20),
+
+                  // EMAIL
                   _buildTextField(
                     controller: _emailController,
                     hintText: 'Enter your email',
@@ -119,7 +129,7 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                   SizedBox(height: 20),
 
-                  // Password Input
+                  // PASSWORD
                   _buildTextField(
                     controller: _passwordController,
                     hintText: 'Enter your password',
@@ -128,16 +138,17 @@ class _SignupScreenState extends State<SignupScreen> {
                   ),
                   SizedBox(height: 40),
 
-                  // Signup Button
+                  // SIGNUP BUTTON
                   _buildSignupButton(),
 
-                  // Login Redirect
                   SizedBox(height: 20),
+
                   TextButton(
                     onPressed: () {
                       Navigator.pushReplacement(
                         context,
-                        MaterialPageRoute(builder: (context) => LoginScreen()),
+                        MaterialPageRoute(
+                            builder: (context) => LoginScreen()),
                       );
                     },
                     child: Text(
@@ -154,7 +165,7 @@ class _SignupScreenState extends State<SignupScreen> {
     );
   }
 
-  // Custom TextField widget with icons and focus effects
+  // 🔹 CUSTOM TEXT FIELD
   Widget _buildTextField({
     required TextEditingController controller,
     required String hintText,
@@ -164,33 +175,24 @@ class _SignupScreenState extends State<SignupScreen> {
   }) {
     return Container(
       decoration: BoxDecoration(
-        color: Colors.white.withOpacity(0.8),
+        color: Colors.white.withOpacity(0.85),
         borderRadius: BorderRadius.circular(12),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black26,
-            blurRadius: 8,
-            offset: Offset(0, 4),
-          ),
-        ],
       ),
       child: TextField(
         controller: controller,
         obscureText: obscureText,
         keyboardType: keyboardType,
-        style: TextStyle(fontSize: 16),
         decoration: InputDecoration(
-          prefixIcon: Icon(icon, color: Colors.black),
+          prefixIcon: Icon(icon),
           hintText: hintText,
-          hintStyle: TextStyle(color: Colors.black26.withOpacity(0.6)),
           border: InputBorder.none,
-          contentPadding: EdgeInsets.symmetric(vertical: 18, horizontal: 20),
+          contentPadding: EdgeInsets.symmetric(vertical: 18),
         ),
       ),
     );
   }
 
-  // Custom Signup Button with gradient
+  // 🔹 SIGNUP BUTTON
   Widget _buildSignupButton() {
     return GestureDetector(
       onTap: isLoading ? null : signup,
@@ -200,30 +202,18 @@ class _SignupScreenState extends State<SignupScreen> {
         decoration: BoxDecoration(
           gradient: LinearGradient(
             colors: [Colors.blueAccent, Colors.purpleAccent],
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
           ),
           borderRadius: BorderRadius.circular(8),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black26,
-              blurRadius: 8,
-              offset: Offset(0, 4),
-            ),
-          ],
         ),
         child: isLoading
-            ? CircularProgressIndicator(
-                color: Colors.white,
-              )
+            ? Center(child: CircularProgressIndicator(color: Colors.white))
             : Text(
                 'Sign Up',
                 textAlign: TextAlign.center,
                 style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 18,
-                  fontWeight: FontWeight.bold,
-                ),
+                    color: Colors.white,
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold),
               ),
       ),
     );

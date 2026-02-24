@@ -25,12 +25,12 @@ class _HomeScreenState extends State<HomeScreen> {
   double? longitude;
   bool isCheckedIn = false;
   bool isInsideOffice = false;
+  bool isGpsEnabled = true;
 
-  bool isGpsTrackingEnabled =
-      true; // New variable to manage GPS tracking toggle
   final LocationService locationService = LocationService();
   late StreamSubscription<Position> _positionStreamSubscription;
 
+  @override
   @override
   @override
   void initState() {
@@ -44,7 +44,24 @@ class _HomeScreenState extends State<HomeScreen> {
     });
 
     locationService.startListeningToOfficeLocations();
+
+    _checkGpsStatus(); // ⭐ NEW
     _startLocationTracking();
+
+    // ⭐ Auto-update if user turns GPS on/off
+    Geolocator.getServiceStatusStream().listen((status) {
+      setState(() {
+        isGpsEnabled = status == ServiceStatus.enabled;
+      });
+    });
+  }
+
+  Future<void> _checkGpsStatus() async {
+    bool enabled = await Geolocator.isLocationServiceEnabled();
+
+    setState(() {
+      isGpsEnabled = enabled;
+    });
   }
 
   void _startLocationTracking() {
@@ -76,18 +93,6 @@ class _HomeScreenState extends State<HomeScreen> {
     _positionStreamSubscription.cancel();
     locationService.stopListeningToOfficeLocations();
     super.dispose();
-  }
-
-  void _toggleGpsTracking() {
-    setState(() {
-      isGpsTrackingEnabled = !isGpsTrackingEnabled;
-    });
-
-    if (isGpsTrackingEnabled) {
-      _startLocationTracking();
-    } else {
-      _positionStreamSubscription.cancel();
-    }
   }
 
   @override
@@ -134,75 +139,49 @@ class _HomeScreenState extends State<HomeScreen> {
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _buildCheckInStatusCard(),
+
             SizedBox(height: 20),
-            _buildToggleGpsButton(), // Add the toggle button here
+
+            _buildGpsStatusCard(),
+
             SizedBox(height: 20),
-            isGpsTrackingEnabled
-                ? _buildMap()
-                : Card(
-                    elevation: 5.0,
-                    shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12.0),
-                    ),
-                    color: Colors.red.shade100,
-                    child: Padding(
-                      padding: const EdgeInsets.all(16.0),
-                      child: Column(
-                        mainAxisSize: MainAxisSize.min,
-                        children: [
-                          Text(
-                            "Please Check-in/Out Manually at Required Location.",
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14.0,
-                              color: Colors.black,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                          SizedBox(height: 10),
-                          Text(
-                            "Automated Attendance System is turned off.",
-                            style: TextStyle(
-                              fontWeight: FontWeight.w600,
-                              fontSize: 14.0,
-                              color: Colors.black,
-                            ),
-                            textAlign: TextAlign.center,
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
+
+            _buildMap(),
+
             SizedBox(height: 20),
             Expanded(
               child: GridView.count(
                 crossAxisCount: 2,
                 crossAxisSpacing: 16,
                 mainAxisSpacing: 16,
+                 childAspectRatio: 1.6,
                 children: [
-                  if (isInsideOffice == true)
-                    _buildActionCard(
-                      icon: Icons.edit_location,
-                      label: "Manual Check-In/Out",
-                      onTap: () async {
-                        final result = await Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) =>
-                                ManualAttendancePage(user: widget.user),
-                          ),
-                        );
+                  _buildActionCard(
+                    icon: Icons.edit_location,
+                    label: "Manual Check-In/Out",
+                    onTap: () async {
+                      final result = await Navigator.push(
+                        context,
+                        MaterialPageRoute(
+                          builder: (_) =>
+                              ManualAttendancePage(user: widget.user),
+                        ),
+                      );
 
-                        // 🔥 AFTER MANUAL ACTION → FETCH REAL STATUS FROM FIRESTORE
-                        bool updatedStatus = await locationService
-                            .getCheckInStatus(widget.user!.uid);
-
+                      if (result == 'checked_in') {
                         setState(() {
-                          isCheckedIn = updatedStatus;
+                          isCheckedIn = true;
                         });
-                      },
-                      color: Colors.purpleAccent,
-                    ),
+                      }
+
+                      if (result == 'checked_out') {
+                        setState(() {
+                          isCheckedIn = false;
+                        });
+                      }
+                    },
+                    color: Colors.purpleAccent,
+                  ),
 
                   _buildActionCard(
                     icon: Icons.access_time,
@@ -247,27 +226,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Toggle Button for GPS tracking
-  Widget _buildToggleGpsButton() {
-    return Row(
-      mainAxisAlignment: MainAxisAlignment.center,
-      children: [
-        Text(
-          "Automatic GPS Tracking",
-          style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600),
-        ),
-        SizedBox(width: 10),
-        Switch(
-          value: isGpsTrackingEnabled,
-          onChanged: (value) => _toggleGpsTracking(),
-          activeColor: Colors.blueAccent,
-          inactiveThumbColor: Colors.grey,
-          inactiveTrackColor: Colors.grey.shade300,
-        ),
-      ],
-    );
-  }
-
   // Check-In Status Card and other widgets remain unchanged
   Widget _buildCheckInStatusCard() {
     return Card(
@@ -295,6 +253,44 @@ class _HomeScreenState extends State<HomeScreen> {
                 fontSize: 18,
                 fontWeight: FontWeight.bold,
                 color: isCheckedIn ? Colors.green : Colors.red,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildGpsStatusCard() {
+    return Card(
+      elevation: 4,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+      child: Container(
+        padding: EdgeInsets.all(16),
+        decoration: BoxDecoration(
+          color: isGpsEnabled
+              ? Colors.green.withOpacity(0.1)
+              : Colors.red.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Row(
+          children: [
+            Icon(
+              isGpsEnabled ? Icons.gps_fixed : Icons.gps_off,
+              color: isGpsEnabled ? Colors.green : Colors.red,
+              size: 36,
+            ),
+            SizedBox(width: 16),
+            Expanded(
+              child: Text(
+                isGpsEnabled
+                    ? "GPS is ON Geolocation working"
+                    : "GPS is OFF Please turn ON location",
+                style: TextStyle(
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                  color: isGpsEnabled ? Colors.green : Colors.red,
+                ),
               ),
             ),
           ],
@@ -350,7 +346,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  // Action Cards for manual check-in, working hours, etc.
   Widget _buildActionCard({
     required IconData icon,
     required String label,
@@ -360,24 +355,25 @@ class _HomeScreenState extends State<HomeScreen> {
     return GestureDetector(
       onTap: onTap,
       child: Card(
-        elevation: 3,
+        elevation: 2,
         shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         child: Container(
           decoration: BoxDecoration(
             color: color.withOpacity(0.1),
             borderRadius: BorderRadius.circular(12),
           ),
-          padding: EdgeInsets.all(16),
+          padding: EdgeInsets.symmetric(vertical: 10, horizontal: 8),
           child: Column(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 40, color: color),
-              SizedBox(height: 8),
+              Icon(icon, size: 28, color: color), // ⭐ slightly bigger icon
+              SizedBox(height: 6),
               Text(
                 label,
+                textAlign: TextAlign.center,
                 style: TextStyle(
-                  fontSize: 16,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
                   color: color,
                 ),
               ),
